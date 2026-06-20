@@ -1,92 +1,122 @@
 import re
 
-def parse_auth_log_line(line):
+
+def parse_log_line(line):
     """
-    Parse a single Linux auth log line into a dictionary.
+    Parse a single log line into an event dictionary.
+
+    Expected format (SSH failed/login example):
+        Oct 15 10:30:45 server sshd[1234]: Failed password for admin from 192.168.1.10 port 22 ssh2
+
+    Returns a dict with:
+        timestamp, host, service, pid, event_type, username, ip_address, result, raw_message
+    Returns None if the line cannot be parsed.
     """
-    pattern = r'(\w+\s+\d+\s+\d:\d:\d+)\s+(\S+)\s+(\S+)\s*\[(\d+)\]:\s*(.+)'
+    line = line.strip()
+    if not line:
+        return None
+
+    # Pattern for: timestamp host service[pid]: message
+    pattern = r'^(\S+\s+\S+\s+\S+)\s+(\S+)\s+(\S+)\[(\d+)\]:\s+(.*)$'
     match = re.match(pattern, line)
 
     if not match:
-        return None
+        # Try a simpler pattern without pid
+        pattern_simple = r'^(\S+\s+\S+\s+\S+)\s+(\S+)\s+(\S+):\s+(.*)$'
+        match_simple = re.match(pattern_simple, line)
+        if not match_simple:
+            return None
+        timestamp, host, service, message = match_simple.groups()
+        pid = None
+    else:
+        timestamp, host, service, pid, message = match.groups()
 
-    timestamp, host, service, pid, message = match.groups()
-
-    event_type = None
+    # Determine event type and extract username / ip
+    event_type = "unknown"
     username = None
     ip_address = None
-    result = None
+    result = "unknown"
 
-    if 'Failed password' in message:
-        event_type = 'failed_login'
-        result = 'failed'
+    # Failed password
+    if "Failed password" in message or "failure" in message.lower():
+        event_type = "failed_login"
+        result = "failed"
 
-        username_match = re.search(r'for (?:invalid user )?(\S+) from', message)
-        ip_match = re.search(r'from (\S+) port', message)
+        # Example: "Failed password for admin from 192.168.1.10 port 22 ssh2"
+        user_match = re.search(r'for\s+(\S+)\s+from\s+(\S+)', message)
+        if user_match:
+            username = user_match.group(1)
+            ip_address = user_match.group(2)
 
-        if username_match:
-            username = username_match.group(1)
+    # Accepted password / successful login
+    elif "Accepted password" in message or "success" in message.lower():
+        event_type = "successful_login"
+        result = "success"
+
+        user_match = re.search(r'for\s+(\S+)\s+from\s+(\S+)', message)
+        if user_match:
+            username = user_match.group(1)
+            ip_address = user_match.group(2)
+
+    # Invalid user
+    elif "Invalid user" in message:
+        event_type = "invalid_user"
+        result = "failed"
+        user_match = re.search(r'Invalid user\s+(\S+)', message)
+        if user_match:
+            username = user_match.group(1)
+
+        ip_match = re.search(r'from\s+(\S+)', message)
         if ip_match:
-            ip_address = ip_match.group(1)
+            ip_address = ip_match.group(2)
 
-    elif 'Accepted password' in message:
-        event_type = 'successful_login'
-        result = 'success'
+    # Connection closed
+    elif "connection closed" in message.lower():
+        event_type = "connection_closed"
+        result = "closed"
 
-        username_match = re.search(r'for (\S+) from', message)
-        ip_match = re.search(r'from (\S+) port', message)
-
-        if username_match:
-            username = username_match.group(1)
-        if ip_match:
-            ip_address = ip_match.group(1)
-
-    elif 'sudo:' in message:
-        event_type = 'sudo'
-        result = 'sudo_command'
-
-        username_match = re.search(r'(\S+):\s+sudo:', message)
-        if username_match:
-            username = username_match.group(1)
-
-    if not event_type:
-        return None
-
-    return {
-        'timestamp': timestamp,
-        'host': host,
-        'service': service,
-        'pid': pid,
-        'event_type': event_type,
-        'username': username,
-        'ip_address': ip_address,
-        'result': result,
-        'raw_message': message
+    event = {
+        "timestamp": timestamp,
+        "host": host,
+        "service": service,
+        "pid": pid,
+        "event_type": event_type,
+        "username": username,
+        "ip_address": ip_address,
+        "result": result,
+        "raw_message": message,
     }
 
+    return event
 
-def parse_log_file(lines):
+
+def parse_log_file(log_path):
     """
-    Parse a list of log lines and return a list of dictionaries.
+    Parse a log file line by line and return a list of event dictionaries.
     """
     events = []
-    for line in lines:
-        if not line:
-            continue
-        parsed = parse_auth_log_line(line)
-        if parsed:
-            events.append(parsed)
+    with open(log_path, "r", encoding="utf-8") as f:
+        for line in f:
+            event = parse_log_line(line)
+            if event:
+                events.append(event)
     return events
 
 
-if __name__ == '__main__':
-    test_lines = [
-        'Oct 15 10:30:45 server sshd[1234]: Failed password for admin from 192.168.1.10 port 22 ssh2',
-        'Oct 15 10:31:15 server sshd[1236]: Accepted password for alice from 192.168.1.20 port 22 ssh2',
-        'Oct 15 10:32:00 server sudo[1237]: alice: sudo command executed'
-    ]
+if __name__ == "__main__":
+    # Test with a sample log file
+    test_log = """
+Oct 15 10:30:45 server sshd[1234]: Failed password for admin from 192.168.1.10 port 22 ssh2
+Oct 15 10:31:00 server sshd[1235]: Accepted password for user1 from 192.168.1.20 port 22 ssh2
+Oct 15 10:32:10 server sshd[1236]: Invalid user hacker from 10.0.0.5 port 22
+""".strip()
 
-    events = parse_log_file(test_lines)
-    print(f"Parsed {len(events)} events")
-    for event in events:
-        print(event)
+    # Parse test string as if it's a file in memory
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8", suffix=".log") as tmp:
+        tmp.write(test_log)
+        tmp_path = tmp.name
+
+    events = parse_log_file(tmp_path)
+    for e in events:
+        print(e)

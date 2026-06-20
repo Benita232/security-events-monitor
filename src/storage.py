@@ -54,20 +54,32 @@ def save_events(events, db_path="output/events.db"):
     return count
 
 
-if __name__ == "__main__":
-    sample_events = [
-        {
-            "timestamp": "Oct 15 10:30:45",
-            "host": "server",
-            "service": "sshd",
-            "pid": "1234",
-            "event_type": "failed_login",
-            "username": "admin",
-            "ip_address": "192.168.1.10",
-            "result": "failed",
-            "raw_message": "Failed password for admin from 192.168.1.10 port 22 ssh2"
-        }
-    ]
 
-    saved = save_events(sample_events)
+def read_events(db_path="output/events.db"):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM events")
+    rows = cursor.fetchall()
+    
+    conn.close()
+    
+    print(f"Found {len(rows)} events")
+    for row in rows:
+        print(row)
+
+if __name__ == "__main__":
+    saved = save_events([{
+        "timestamp": "Oct 15 10:30:45",
+        "host": "server",
+        "service": "sshd",
+        "pid": "1234",
+        "event_type": "failed_login",
+        "username": "admin",
+        "ip_address": "192.168.1.10",
+        "result": "failed",
+        "raw_message": "Failed password for admin from 192.168.1.10 port 22 ssh2"
+    }])
     print(f"Saved {saved} events")
+    
+    read_events()
